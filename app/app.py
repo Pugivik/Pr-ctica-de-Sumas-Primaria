@@ -127,6 +127,14 @@ def index() -> rx.Component:
                     "mt-6 text-xl font-medium h-7",
                 ),
             ),
+            rx.el.a(
+                "Descargar index.html",
+                on_click=rx.download(
+                    url="/index.html", filename="index.html"
+                ),
+                class_name="mt-8 px-6 py-2 bg-blue-500 text-white font-semibold rounded-lg hover:bg-blue-600 transition-colors duration-200 shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 cursor-pointer",
+                href="#",
+            ),
             class_name="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-blue-100 via-indigo-50 to-purple-100 p-4",
         ),
         on_mount=SumPracticeState.start_new_problem,
