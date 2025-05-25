@@ -3,7 +3,6 @@ import random
 import asyncio
 from typing import Generator
 
-PROBLEM_TIME_LIMIT = 20
 GAME_TOTAL_TIME = 120
 
 
@@ -11,8 +10,6 @@ class SumPracticeState(rx.State):
     num1: int = 0
     num2: int = 0
     user_answer: str = ""
-    problem_time_left: int = PROBLEM_TIME_LIMIT
-    problem_timer_is_active: bool = False
     game_time_left: int = GAME_TOTAL_TIME
     game_timer_is_active: bool = False
     game_over: bool = False
@@ -34,18 +31,12 @@ class SumPracticeState(rx.State):
         yield SumPracticeState.game_timer_tick
 
     @rx.event
-    def start_new_problem(
-        self,
-    ) -> Generator[rx.event.EventSpec | None, None, None]:
+    def start_new_problem(self) -> None:
         if self.game_over:
-            self.problem_timer_is_active = False
             return
         self.num1 = random.randint(10, 99)
         self.num2 = random.randint(10, 99)
         self.user_answer = ""
-        self.problem_time_left = PROBLEM_TIME_LIMIT
-        self.problem_timer_is_active = True
-        yield SumPracticeState.problem_timer_tick
 
     @rx.event
     def handle_submit(
@@ -53,7 +44,6 @@ class SumPracticeState(rx.State):
     ) -> Generator[rx.event.EventSpec | None, None, None]:
         if self.game_over:
             return
-        self.problem_timer_is_active = False
         answer_str = form_data.get("answer", "")
         self.user_answer = answer_str
         feedback_msg = ""
@@ -78,49 +68,6 @@ class SumPracticeState(rx.State):
             yield SumPracticeState.start_new_problem
 
     @rx.event(background=True)
-    async def problem_timer_tick(self):
-        async with self:
-            if (
-                not self.problem_timer_is_active
-                or self.game_over
-            ):
-                return
-        await asyncio.sleep(1)
-        async with self:
-            if (
-                not self.problem_timer_is_active
-                or self.game_over
-            ):
-                return
-            self.problem_time_left -= 1
-            if self.problem_time_left <= 0:
-                self.problem_time_left = 0
-                self.problem_timer_is_active = False
-                yield SumPracticeState.handle_problem_timeout
-                return
-            elif self.problem_timer_is_active and (
-                not self.game_over
-            ):
-                yield SumPracticeState.problem_timer_tick
-                return
-
-    @rx.event
-    def handle_problem_timeout(
-        self,
-    ) -> Generator[rx.event.EventSpec | None, None, None]:
-        if self.game_over:
-            return
-        self.score -= 1
-        feedback_msg = f"¡Tiempo del problema agotado! La respuesta era {self.correct_sum}. -1 Punto"
-        yield rx.toast(
-            feedback_msg,
-            duration=2000,
-            position="top-center",
-        )
-        if not self.game_over:
-            yield SumPracticeState.start_new_problem
-
-    @rx.event(background=True)
     async def game_timer_tick(self):
         async with self:
             if (
@@ -130,14 +77,16 @@ class SumPracticeState(rx.State):
                 return
         await asyncio.sleep(1)
         async with self:
-            if not self.game_timer_is_active:
+            if (
+                not self.game_timer_is_active
+                or self.game_over
+            ):
                 return
             self.game_time_left -= 1
             if self.game_time_left <= 0:
                 self.game_time_left = 0
                 self.game_over = True
                 self.game_timer_is_active = False
-                self.problem_timer_is_active = False
                 yield rx.toast(
                     "¡Juego Terminado!",
                     duration=3000,
@@ -217,19 +166,7 @@ def active_game_screen() -> rx.Component:
     return rx.el.div(
         rx.el.h1(
             "Practica de Sumas",
-            class_name="text-3xl font-bold text-indigo-700 mb-4 text-center",
-        ),
-        rx.el.div(
-            rx.el.span(
-                "Tiempo del problema: ",
-                class_name="font-medium text-sm",
-            ),
-            rx.el.span(
-                SumPracticeState.problem_time_left,
-                class_name="font-bold text-sm",
-            ),
-            rx.el.span("s", class_name="text-sm"),
-            class_name="text-md text-gray-600 mb-6 text-center",
+            class_name="text-3xl font-bold text-indigo-700 mb-8 text-center",
         ),
         rx.el.div(
             number_box(SumPracticeState.num1),
@@ -249,15 +186,13 @@ def active_game_screen() -> rx.Component:
                 + "_"
                 + SumPracticeState.num2.to_string(),
                 default_value=SumPracticeState.user_answer,
-                disabled=SumPracticeState.game_over
-                | (SumPracticeState.problem_time_left == 0),
+                disabled=SumPracticeState.game_over,
             ),
             rx.el.button(
                 "Revisar Respuesta",
                 type="submit",
                 class_name="mt-6 px-8 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors duration-200 shadow-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2",
                 disabled=SumPracticeState.game_over
-                | (SumPracticeState.problem_time_left == 0)
                 | (SumPracticeState.user_answer == ""),
             ),
             on_submit=SumPracticeState.handle_submit,
