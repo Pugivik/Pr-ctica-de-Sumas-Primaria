@@ -1,5 +1,6 @@
 import reflex as rx
 import random
+import asyncio
 from typing import Generator
 
 
@@ -10,24 +11,32 @@ class SumPracticeState(rx.State):
     feedback_message: str = ""
     feedback_type: str = ""
     attempts_left: int = 2
+    time_left: int = 10
+    timer_is_active: bool = False
 
     @rx.var
     def correct_sum(self) -> int:
         return self.num1 + self.num2
 
     @rx.event
-    def start_new_problem(self) -> None:
-        self.num1 = random.randint(1, 9)
-        self.num2 = random.randint(1, 9)
+    def start_new_problem(
+        self,
+    ) -> Generator[rx.event.EventSpec | None, None, None]:
+        self.num1 = random.randint(10, 99)
+        self.num2 = random.randint(10, 99)
         self.user_answer = ""
         self.feedback_message = ""
         self.feedback_type = ""
         self.attempts_left = 2
+        self.time_left = 10
+        self.timer_is_active = True
+        yield SumPracticeState.timer_tick
 
     @rx.event
     def handle_submit(
         self, form_data: dict
     ) -> Generator[rx.event.EventSpec | None, None, None]:
+        self.timer_is_active = False
         answer_str = form_data.get("answer", "")
         self.user_answer = answer_str
         try:
@@ -62,6 +71,40 @@ class SumPracticeState(rx.State):
             self.feedback_type = "warning"
             self.user_answer = ""
 
+    @rx.event(background=True)
+    async def timer_tick(self):
+        async with self:
+            if not self.timer_is_active:
+                return
+        await asyncio.sleep(1)
+        async with self:
+            if not self.timer_is_active:
+                return
+            self.time_left -= 1
+            if self.time_left <= 0:
+                self.time_left = 0
+                if self.timer_is_active:
+                    self.timer_is_active = False
+                    self.feedback_message = f"¡Tiempo agotado! La respuesta correcta era {self.correct_sum}."
+                    self.feedback_type = "info"
+                    return (
+                        SumPracticeState.start_new_problem_after_timeout
+                    )
+                return
+            elif self.timer_is_active:
+                return SumPracticeState.timer_tick
+
+    @rx.event
+    def start_new_problem_after_timeout(
+        self,
+    ) -> Generator[rx.event.EventSpec | None, None, None]:
+        yield rx.toast(
+            self.feedback_message,
+            duration=2500,
+            position="top-center",
+        )
+        yield SumPracticeState.start_new_problem
+
 
 def number_box(number_var: rx.Var[int]) -> rx.Component:
     return rx.el.div(
@@ -80,9 +123,24 @@ def operator_display(operator: str) -> rx.Component:
 def index() -> rx.Component:
     return rx.el.main(
         rx.el.div(
+            rx.el.div(
+                rx.el.div(
+                    rx.el.span(
+                        "Tiempo restante: ",
+                        class_name="font-medium",
+                    ),
+                    rx.el.span(
+                        SumPracticeState.time_left,
+                        class_name="font-bold",
+                    ),
+                    rx.el.span("s"),
+                    class_name="text-lg text-gray-700",
+                ),
+                class_name="absolute top-5 right-5 bg-white px-4 py-2 rounded-lg shadow-md border border-gray-200 z-10",
+            ),
             rx.el.h1(
                 "Practica de Sumas de Primaria",
-                class_name="text-3xl font-bold text-indigo-700 mb-10 text-center",
+                class_name="text-3xl font-bold text-indigo-700 mb-10 text-center pt-20",
             ),
             rx.el.div(
                 number_box(SumPracticeState.num1),
@@ -98,11 +156,27 @@ def index() -> rx.Component:
                     type="number",
                     class_name="w-24 h-20 border-2 border-gray-400 rounded-lg text-center text-4xl font-bold focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm",
                     auto_focus=True,
+                    disabled=(
+                        SumPracticeState.time_left == 0
+                    )
+                    | (SumPracticeState.attempts_left == 0)
+                    & (
+                        SumPracticeState.feedback_type
+                        != "success"
+                    ),
                 ),
                 rx.el.button(
                     "Revisar Respuesta",
                     type="submit",
                     class_name="mt-6 px-8 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors duration-200 shadow-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2",
+                    disabled=(
+                        SumPracticeState.time_left == 0
+                    )
+                    | (SumPracticeState.attempts_left == 0)
+                    & (
+                        SumPracticeState.feedback_type
+                        != "success"
+                    ),
                 ),
                 on_submit=SumPracticeState.handle_submit,
                 reset_on_submit=True,
@@ -124,18 +198,14 @@ def index() -> rx.Component:
                         "warning",
                         "text-yellow-500 mt-6 text-xl font-medium",
                     ),
+                    (
+                        "info",
+                        "text-blue-600 mt-6 text-xl font-medium",
+                    ),
                     "mt-6 text-xl font-medium h-7",
                 ),
             ),
-            rx.el.a(
-                "Descargar index.html",
-                on_click=rx.download(
-                    url="/index.html", filename="index.html"
-                ),
-                class_name="mt-8 px-6 py-2 bg-blue-500 text-white font-semibold rounded-lg hover:bg-blue-600 transition-colors duration-200 shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 cursor-pointer",
-                href="#",
-            ),
-            class_name="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-blue-100 via-indigo-50 to-purple-100 p-4",
+            class_name="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-blue-100 via-indigo-50 to-purple-100 p-4",
         ),
         on_mount=SumPracticeState.start_new_problem,
         class_name="font-['Inter']",
