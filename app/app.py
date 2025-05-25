@@ -3,7 +3,7 @@ import random
 import asyncio
 from typing import Generator
 
-INITIAL_TIME_LIMIT = 15
+INITIAL_TIME_LIMIT = 20
 ATTEMPTS_PER_PROBLEM = 2
 
 
