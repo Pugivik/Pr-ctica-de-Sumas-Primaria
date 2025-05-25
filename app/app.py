@@ -166,4 +166,4 @@ app = rx.App(
     head_components=head_components,
     html_lang="es",
 )
-app.add_page(index)
+app.add_page(index, route="/")
