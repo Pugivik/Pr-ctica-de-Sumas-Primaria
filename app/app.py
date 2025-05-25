@@ -3,6 +3,9 @@ import random
 import asyncio
 from typing import Generator
 
+INITIAL_TIME_LIMIT = 15
+ATTEMPTS_PER_PROBLEM = 2
+
 
 class SumPracticeState(rx.State):
     num1: int = 0
@@ -10,8 +13,8 @@ class SumPracticeState(rx.State):
     user_answer: str = ""
     feedback_message: str = ""
     feedback_type: str = ""
-    attempts_left: int = 2
-    time_left: int = 10
+    attempts_left: int = ATTEMPTS_PER_PROBLEM
+    time_left: int = INITIAL_TIME_LIMIT
     timer_is_active: bool = False
 
     @rx.var
@@ -27,8 +30,8 @@ class SumPracticeState(rx.State):
         self.user_answer = ""
         self.feedback_message = ""
         self.feedback_type = ""
-        self.attempts_left = 2
-        self.time_left = 10
+        self.attempts_left = ATTEMPTS_PER_PROBLEM
+        self.time_left = INITIAL_TIME_LIMIT
         self.timer_is_active = True
         yield SumPracticeState.timer_tick
 
@@ -53,8 +56,11 @@ class SumPracticeState(rx.State):
             else:
                 self.attempts_left -= 1
                 if self.attempts_left > 0:
-                    self.feedback_message = "Incorrecto. Te queda 1 intento más."
+                    self.feedback_message = "Incorrecto. Te queda 1 intento más. ¡Tiempo reiniciado!"
                     self.feedback_type = "error"
+                    self.time_left = INITIAL_TIME_LIMIT
+                    self.timer_is_active = True
+                    yield SumPracticeState.timer_tick
                 else:
                     self.feedback_message = f"Fallaste. La respuesta correcta era {self.correct_sum}."
                     self.feedback_type = "error"
@@ -70,6 +76,8 @@ class SumPracticeState(rx.State):
             )
             self.feedback_type = "warning"
             self.user_answer = ""
+            self.timer_is_active = True
+            yield SumPracticeState.timer_tick
 
     @rx.event(background=True)
     async def timer_tick(self):
@@ -87,17 +95,15 @@ class SumPracticeState(rx.State):
                     self.timer_is_active = False
                     self.feedback_message = f"¡Tiempo agotado! La respuesta correcta era {self.correct_sum}."
                     self.feedback_type = "info"
-                    return (
-                        SumPracticeState.start_new_problem_after_timeout
-                    )
-                return
+                    return SumPracticeState.handle_timeout
             elif self.timer_is_active:
                 return SumPracticeState.timer_tick
 
     @rx.event
-    def start_new_problem_after_timeout(
+    def handle_timeout(
         self,
     ) -> Generator[rx.event.EventSpec | None, None, None]:
+        """Handles the sequence of actions after a timeout."""
         yield rx.toast(
             self.feedback_message,
             duration=2500,
@@ -156,6 +162,9 @@ def index() -> rx.Component:
                     type="number",
                     class_name="w-24 h-20 border-2 border-gray-400 rounded-lg text-center text-4xl font-bold focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm",
                     auto_focus=True,
+                    key=SumPracticeState.num1.to_string()
+                    + SumPracticeState.num2.to_string(),
+                    default_value=SumPracticeState.user_answer,
                     disabled=(
                         SumPracticeState.time_left == 0
                     )
@@ -179,7 +188,7 @@ def index() -> rx.Component:
                     ),
                 ),
                 on_submit=SumPracticeState.handle_submit,
-                reset_on_submit=True,
+                reset_on_submit=False,
                 class_name="flex flex-col items-center",
             ),
             rx.el.p(
