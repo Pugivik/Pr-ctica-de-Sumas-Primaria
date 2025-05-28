@@ -1,18 +1,18 @@
 import reflex as rx
 import random
-import asyncio
 from typing import Generator
 
-INITIAL_PROBLEM_DURATION = 20
-BONUS_TIME_PER_CORRECT_ANSWER = 15
+TOTAL_EXERCISES = 15
+POINTS_CORRECT = 3
+POINTS_INCORRECT = -1
 
 
 class SumPracticeState(rx.State):
     num1: int = 0
     num2: int = 0
-    problem_time_left: int = INITIAL_PROBLEM_DURATION
-    problem_timer_is_active: bool = False
-    apply_bonus_to_next_problem: bool = False
+    current_exercise_number: int = 0
+    score: int = 0
+    game_over: bool = False
 
     @rx.var
     def correct_sum(self) -> int:
@@ -22,77 +22,49 @@ class SumPracticeState(rx.State):
     def initialize_session(
         self,
     ) -> Generator[rx.event.EventSpec | None, None, None]:
-        """Initializes the practice session by starting the first problem."""
-        self.apply_bonus_to_next_problem = False
+        self.current_exercise_number = 0
+        self.score = 0
+        self.game_over = False
         yield SumPracticeState.start_new_problem
 
     @rx.event
-    def start_new_problem(
-        self,
-    ) -> Generator[rx.event.EventSpec | None, None, None]:
-        """Sets up a new problem, resets its timer, and starts the countdown."""
-        self.num1 = random.randint(10, 99)
-        self.num2 = random.randint(10, 99)
-        current_duration = INITIAL_PROBLEM_DURATION
-        if self.apply_bonus_to_next_problem:
-            current_duration += (
-                BONUS_TIME_PER_CORRECT_ANSWER
-            )
-            self.apply_bonus_to_next_problem = False
-        self.problem_time_left = current_duration
-        self.problem_timer_is_active = True
-        yield SumPracticeState.problem_timer_tick
+    def start_new_problem(self) -> None:
+        if self.game_over:
+            return
+        self.current_exercise_number += 1
+        if self.current_exercise_number > TOTAL_EXERCISES:
+            self.game_over = True
+        else:
+            self.num1 = random.randint(10, 99)
+            self.num2 = random.randint(10, 99)
 
     @rx.event
     def handle_submit(
         self, form_data: dict
     ) -> Generator[rx.event.EventSpec | None, None, None]:
-        """Handles answer submission, provides feedback, and moves to the next problem."""
-        self.problem_timer_is_active = False
+        if self.game_over:
+            yield rx.noop()
+            return
         submitted_value = form_data.get("answer", "")
         feedback_msg = ""
+        toast_props = {
+            "duration": 3000,
+            "position": "top-center",
+        }
         try:
             answer_int = int(submitted_value)
             if answer_int == self.correct_sum:
-                self.apply_bonus_to_next_problem = True
-                feedback_msg = f"¡Correcto! +{BONUS_TIME_PER_CORRECT_ANSWER}s para el próximo problema."
-            else:
-                self.apply_bonus_to_next_problem = False
-                feedback_msg = f"Incorrecto. La respuesta era {self.correct_sum}."
-        except ValueError:
-            self.apply_bonus_to_next_problem = False
-            feedback_msg = "Entrada inválida. Por favor, ingresa un número."
-        yield rx.toast(
-            feedback_msg,
-            duration=3000,
-            position="top-center",
-        )
-        yield SumPracticeState.start_new_problem
-
-    @rx.event(background=True)
-    async def problem_timer_tick(
-        self,
-    ) -> Generator[rx.event.EventSpec | None, None, None]:
-        """Background task to countdown time for the current problem."""
-        async with self:
-            if not self.problem_timer_is_active:
-                return
-        await asyncio.sleep(1)
-        async with self:
-            if not self.problem_timer_is_active:
-                return
-            self.problem_time_left -= 1
-            if self.problem_time_left <= 0:
-                self.problem_timer_is_active = False
-                self.apply_bonus_to_next_problem = False
-                yield rx.toast(
-                    "¡Tiempo agotado!",
-                    duration=3000,
-                    position="top-center",
+                self.score += POINTS_CORRECT
+                feedback_msg = (
+                    f"¡Correcto! +{POINTS_CORRECT} puntos."
                 )
-                yield SumPracticeState.start_new_problem
-            elif self.problem_timer_is_active:
-                yield SumPracticeState.problem_timer_tick
+            else:
+                self.score += POINTS_INCORRECT
+                feedback_msg = f"Incorrecto. La respuesta era {self.correct_sum}. {POINTS_INCORRECT} punto(s)."
+        except ValueError:
+            feedback_msg = "Entrada inválida. Por favor, ingresa un número."
+        yield rx.toast(feedback_msg, **toast_props)
+        yield SumPracticeState.start_new_problem
 
 
 def number_box(number_var: rx.Var[int]) -> rx.Component:
@@ -109,21 +81,24 @@ def operator_display(operator: str) -> rx.Component:
     )
 
 
-def problem_timer_display() -> rx.Component:
+def game_status_bar() -> rx.Component:
     return rx.el.div(
         rx.el.div(
             rx.el.span(
-                "Tiempo restante: ",
-                class_name="font-medium",
+                "Ejercicio: ", class_name="font-medium"
             ),
-            rx.el.span(
-                SumPracticeState.problem_time_left,
-                class_name="font-bold",
-            ),
-            rx.el.span("s"),
+            SumPracticeState.current_exercise_number,
+            rx.el.span(f" / {TOTAL_EXERCISES}"),
             class_name="text-lg text-gray-700",
         ),
-        class_name="fixed top-0 left-0 right-0 bg-white px-6 py-3 shadow-md border-b border-gray-200 z-20 flex justify-center items-center",
+        rx.el.div(
+            rx.el.span(
+                "Puntuación: ", class_name="font-medium"
+            ),
+            SumPracticeState.score,
+            class_name="text-lg text-gray-700",
+        ),
+        class_name="fixed top-0 left-0 right-0 bg-white px-6 py-4 shadow-md border-b border-gray-200 z-20 flex justify-between items-center",
     )
 
 
@@ -157,19 +132,46 @@ def active_practice_screen() -> rx.Component:
             reset_on_submit=True,
             class_name="flex flex-col items-center",
         ),
-        class_name="flex flex-col items-center",
+        class_name="flex flex-col items-center py-10",
+    )
+
+
+def game_over_screen() -> rx.Component:
+    return rx.el.div(
+        rx.el.h1(
+            "¡Juego Terminado!",
+            class_name="text-4xl font-bold text-indigo-700 mb-6 text-center",
+        ),
+        rx.el.p(
+            "Tu puntuación final es: ",
+            rx.el.span(
+                SumPracticeState.score,
+                class_name="font-bold text-2xl text-indigo-600",
+            ),
+            class_name="text-xl text-gray-800 mb-8 text-center",
+        ),
+        rx.el.button(
+            "Jugar de Nuevo",
+            on_click=SumPracticeState.initialize_session,
+            class_name="px-10 py-4 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors duration-200 shadow-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 text-lg",
+        ),
+        class_name="flex flex-col items-center justify-center p-8 bg-white rounded-xl shadow-lg w-full max-w-md",
     )
 
 
 def index() -> rx.Component:
     return rx.el.main(
         rx.el.div(
-            problem_timer_display(),
+            game_status_bar(),
             rx.el.div(
-                active_practice_screen(),
-                class_name="pt-32 pb-10",
+                rx.cond(
+                    SumPracticeState.game_over,
+                    game_over_screen(),
+                    active_practice_screen(),
+                ),
+                class_name="w-full flex flex-col items-center justify-center pt-24 px-4 min-h-[calc(100vh-theme(spacing.24))]",
             ),
-            class_name="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-blue-100 via-indigo-50 to-purple-100 p-4",
+            class_name="relative min-h-screen bg-gradient-to-br from-blue-100 via-indigo-50 to-purple-100",
         ),
         on_mount=SumPracticeState.initialize_session,
         class_name="font-['Inter']",
@@ -177,7 +179,7 @@ def index() -> rx.Component:
 
 
 head_components = [
-    rx.el.title("Practica de Sumas con Bono de Tiempo"),
+    rx.el.title("Practica de Sumas con Puntuación"),
     rx.el.link(
         rel="preconnect",
         href="https://fonts.googleapis.com",
@@ -193,7 +195,7 @@ head_components = [
     ),
     rx.el.meta(
         name="description",
-        content="Una aplicación para practicar sumas de nivel primario con un temporizador por problema y un bono de tiempo fijo para el siguiente problema al acertar.",
+        content="Una aplicación para practicar sumas de nivel primario con un sistema de puntuación y un número fijo de ejercicios.",
     ),
     rx.el.meta(
         name="viewport",
