@@ -1,10 +1,13 @@
 import reflex as rx
 import random
+import asyncio
 from typing import Generator
 
 TOTAL_EXERCISES = 15
 POINTS_CORRECT = 3
 POINTS_INCORRECT = -1
+INITIAL_PROBLEM_TIME = 20
+CORRECT_ANSWER_BONUS_TIME = 15
 
 
 class SumPracticeState(rx.State):
@@ -13,6 +16,8 @@ class SumPracticeState(rx.State):
     current_exercise_number: int = 0
     score: int = 0
     game_over: bool = False
+    problem_time_remaining: int = INITIAL_PROBLEM_TIME
+    timer_task_id: int = 0
 
     @rx.var
     def correct_sum(self) -> int:
@@ -25,18 +30,64 @@ class SumPracticeState(rx.State):
         self.current_exercise_number = 0
         self.score = 0
         self.game_over = False
-        yield SumPracticeState.start_new_problem
+        self.timer_task_id += 1
+        yield SumPracticeState.start_new_exercise_round
 
     @rx.event
-    def start_new_problem(self) -> None:
-        if self.game_over:
-            return
+    def start_new_exercise_round(
+        self,
+    ) -> (
+        Generator[rx.event.EventSpec | None, None, None]
+        | None
+    ):
         self.current_exercise_number += 1
         if self.current_exercise_number > TOTAL_EXERCISES:
             self.game_over = True
-        else:
-            self.num1 = random.randint(10, 99)
-            self.num2 = random.randint(10, 99)
+            self.timer_task_id += 1
+            return
+        self.num1 = random.randint(10, 99)
+        self.num2 = random.randint(10, 99)
+        self.problem_time_remaining = INITIAL_PROBLEM_TIME
+        self.timer_task_id += 1
+        return SumPracticeState.run_problem_timer
+
+    @rx.event(background=True)
+    async def run_problem_timer(
+        self,
+    ) -> Generator[rx.event.EventSpec | None, None, None]:
+        current_run_task_id = self.timer_task_id
+        while True:
+            await asyncio.sleep(1)
+            async with self:
+                if (
+                    self.game_over
+                    or self.timer_task_id
+                    != current_run_task_id
+                ):
+                    return
+                if self.problem_time_remaining > 0:
+                    self.problem_time_remaining -= 1
+                should_handle_timeout = (
+                    self.problem_time_remaining <= 0
+                )
+            if should_handle_timeout:
+                yield SumPracticeState.handle_timeout
+                return
+            yield
+
+    @rx.event
+    def handle_timeout(
+        self,
+    ) -> Generator[rx.event.EventSpec | None, None, None]:
+        if self.game_over:
+            return
+        self.score += POINTS_INCORRECT
+        yield rx.toast(
+            f"¡Tiempo agotado! {POINTS_INCORRECT} punto(s).",
+            duration=3000,
+            position="top-center",
+        )
+        yield SumPracticeState.start_new_exercise_round
 
     @rx.event
     def handle_submit(
@@ -45,8 +96,15 @@ class SumPracticeState(rx.State):
         if self.game_over:
             yield rx.noop()
             return
+        if self.problem_time_remaining <= 0:
+            yield rx.toast(
+                "El tiempo para este problema ya había terminado.",
+                duration=3000,
+                position="top-center",
+            )
+            return
+        self.timer_task_id += 1
         submitted_value = form_data.get("answer", "")
-        feedback_msg = ""
         toast_props = {
             "duration": 3000,
             "position": "top-center",
@@ -55,16 +113,29 @@ class SumPracticeState(rx.State):
             answer_int = int(submitted_value)
             if answer_int == self.correct_sum:
                 self.score += POINTS_CORRECT
-                feedback_msg = (
-                    f"¡Correcto! +{POINTS_CORRECT} puntos."
+                self.problem_time_remaining += (
+                    CORRECT_ANSWER_BONUS_TIME
                 )
+                yield rx.toast(
+                    f"¡Correcto! +{POINTS_CORRECT} puntos. +{CORRECT_ANSWER_BONUS_TIME}s.",
+                    **toast_props,
+                )
+                self.timer_task_id += 1
+                yield SumPracticeState.run_problem_timer
             else:
                 self.score += POINTS_INCORRECT
-                feedback_msg = f"Incorrecto. La respuesta era {self.correct_sum}. {POINTS_INCORRECT} punto(s)."
+                yield rx.toast(
+                    f"Incorrecto. La respuesta era {self.correct_sum}. {POINTS_INCORRECT} punto(s).",
+                    **toast_props,
+                )
+                yield SumPracticeState.start_new_exercise_round
         except ValueError:
-            feedback_msg = "Entrada inválida. Por favor, ingresa un número."
-        yield rx.toast(feedback_msg, **toast_props)
-        yield SumPracticeState.start_new_problem
+            yield rx.toast(
+                "Entrada inválida. Por favor, ingresa un número.",
+                **toast_props,
+            )
+            self.timer_task_id += 1
+            yield SumPracticeState.run_problem_timer
 
 
 def number_box(number_var: rx.Var[int]) -> rx.Component:
@@ -90,6 +161,18 @@ def game_status_bar() -> rx.Component:
             SumPracticeState.current_exercise_number,
             rx.el.span(f" / {TOTAL_EXERCISES}"),
             class_name="text-lg text-gray-700",
+        ),
+        rx.el.div(
+            rx.icon(
+                "clock",
+                class_name="h-5 w-5 mr-1 text-gray-600",
+            ),
+            rx.el.span(
+                "Tiempo: ", class_name="font-medium"
+            ),
+            SumPracticeState.problem_time_remaining,
+            rx.el.span("s", class_name="ml-0.5"),
+            class_name="text-lg text-gray-700 flex items-center",
         ),
         rx.el.div(
             rx.el.span(
@@ -122,6 +205,8 @@ def active_practice_screen() -> rx.Component:
                 type="number",
                 class_name="w-24 h-20 border-2 border-gray-400 rounded-lg text-center text-4xl font-bold focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm",
                 auto_focus=True,
+                key=SumPracticeState.current_exercise_number.to_string()
+                + SumPracticeState.num1.to_string(),
             ),
             rx.el.button(
                 "Revisar Respuesta",
@@ -179,7 +264,9 @@ def index() -> rx.Component:
 
 
 head_components = [
-    rx.el.title("Practica de Sumas con Puntuación"),
+    rx.el.title(
+        "Practica de Sumas con Tiempo y Puntuación"
+    ),
     rx.el.link(
         rel="preconnect",
         href="https://fonts.googleapis.com",
@@ -195,7 +282,7 @@ head_components = [
     ),
     rx.el.meta(
         name="description",
-        content="Una aplicación para practicar sumas de nivel primario con un sistema de puntuación y un número fijo de ejercicios.",
+        content="Practica sumas con tiempo límite por problema, bonus de tiempo por aciertos y puntuación.",
     ),
     rx.el.meta(
         name="viewport",
