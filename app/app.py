@@ -6,7 +6,8 @@ from typing import Generator
 TOTAL_EXERCISES = 15
 POINTS_CORRECT = 3
 POINTS_INCORRECT = -1
-INITIAL_PROBLEM_TIME = 20
+INITIAL_GAME_TIME = 20
+TIME_INCREMENT_CORRECT = 15
 
 
 class SumPracticeState(rx.State):
@@ -15,7 +16,7 @@ class SumPracticeState(rx.State):
     current_exercise_number: int = 0
     score: int = 0
     game_over: bool = False
-    problem_time_remaining: int = INITIAL_PROBLEM_TIME
+    game_time_remaining: int = INITIAL_GAME_TIME
     timer_task_id: int = 0
 
     @rx.var
@@ -29,29 +30,25 @@ class SumPracticeState(rx.State):
         self.current_exercise_number = 0
         self.score = 0
         self.game_over = False
+        self.game_time_remaining = INITIAL_GAME_TIME
         self.timer_task_id += 1
         yield SumPracticeState.start_new_exercise_round
+        yield SumPracticeState.run_game_timer
 
     @rx.event
-    def start_new_exercise_round(
-        self,
-    ) -> (
-        Generator[rx.event.EventSpec | None, None, None]
-        | None
-    ):
+    def start_new_exercise_round(self) -> None:
         self.current_exercise_number += 1
         if self.current_exercise_number > TOTAL_EXERCISES:
             self.game_over = True
             self.timer_task_id += 1
             return
+        if self.game_over:
+            return
         self.num1 = random.randint(10, 99)
         self.num2 = random.randint(10, 99)
-        self.problem_time_remaining = INITIAL_PROBLEM_TIME
-        self.timer_task_id += 1
-        return SumPracticeState.run_problem_timer
 
     @rx.event(background=True)
-    async def run_problem_timer(
+    async def run_game_timer(
         self,
     ) -> Generator[rx.event.EventSpec | None, None, None]:
         current_run_task_id = self.timer_task_id
@@ -65,9 +62,11 @@ class SumPracticeState(rx.State):
                 ):
                     return
                 should_handle_timeout = False
-                if self.problem_time_remaining > 0:
-                    self.problem_time_remaining -= 1
-                if self.problem_time_remaining <= 0:
+                if self.game_time_remaining > 0:
+                    self.game_time_remaining -= 1
+                if self.game_time_remaining <= 0 and (
+                    not self.game_over
+                ):
                     should_handle_timeout = True
             if should_handle_timeout:
                 yield SumPracticeState.handle_timeout
@@ -80,13 +79,13 @@ class SumPracticeState(rx.State):
     ) -> Generator[rx.event.EventSpec | None, None, None]:
         if self.game_over:
             return
-        self.score += POINTS_INCORRECT
+        self.timer_task_id += 1
         yield rx.toast(
-            f"¡Tiempo agotado! {POINTS_INCORRECT} punto(s).",
+            "¡Tiempo agotado! El juego se reiniciará.",
             duration=3000,
             position="top-center",
         )
-        yield SumPracticeState.start_new_exercise_round
+        yield SumPracticeState.initialize_session
 
     @rx.event
     def handle_submit(
@@ -94,13 +93,7 @@ class SumPracticeState(rx.State):
     ) -> Generator[rx.event.EventSpec | None, None, None]:
         if self.game_over:
             return
-        self.timer_task_id += 1
-        if self.problem_time_remaining <= 0:
-            yield rx.toast(
-                "El tiempo para este problema ya había terminado.",
-                duration=3000,
-                position="top-center",
-            )
+        if self.game_time_remaining <= 0:
             return
         submitted_value = form_data.get("answer", "")
         toast_props = {
@@ -111,8 +104,11 @@ class SumPracticeState(rx.State):
             answer_int = int(submitted_value)
             if answer_int == self.correct_sum:
                 self.score += POINTS_CORRECT
+                self.game_time_remaining += (
+                    TIME_INCREMENT_CORRECT
+                )
                 yield rx.toast(
-                    f"¡Correcto! +{POINTS_CORRECT} puntos.",
+                    f"¡Correcto! +{POINTS_CORRECT} puntos. Tiempo +{TIME_INCREMENT_CORRECT}s.",
                     **toast_props,
                 )
             else:
@@ -127,7 +123,6 @@ class SumPracticeState(rx.State):
                 "Entrada inválida. Por favor, ingresa un número.",
                 **toast_props,
             )
-            yield SumPracticeState.run_problem_timer
 
 
 def number_box(number_var: rx.Var[int]) -> rx.Component:
@@ -162,7 +157,7 @@ def game_status_bar() -> rx.Component:
             rx.el.span(
                 "Tiempo: ", class_name="font-medium"
             ),
-            SumPracticeState.problem_time_remaining,
+            SumPracticeState.game_time_remaining,
             rx.el.span("s", class_name="ml-0.5"),
             class_name="text-lg text-gray-700 flex items-center",
         ),
@@ -275,7 +270,7 @@ head_components = [
     ),
     rx.el.meta(
         name="description",
-        content="Practica sumas con tiempo límite por problema y puntuación. Los números son de dos dígitos y avanzas al siguiente ejercicio tras cada respuesta.",
+        content="Practica sumas con tiempo de juego total, incrementos por aciertos y reinicio al agotarse el tiempo.",
     ),
     rx.el.meta(
         name="viewport",
