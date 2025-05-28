@@ -7,7 +7,6 @@ TOTAL_EXERCISES = 15
 POINTS_CORRECT = 3
 POINTS_INCORRECT = -1
 INITIAL_PROBLEM_TIME = 20
-CORRECT_ANSWER_BONUS_TIME = 15
 
 
 class SumPracticeState(rx.State):
@@ -65,11 +64,11 @@ class SumPracticeState(rx.State):
                     != current_run_task_id
                 ):
                     return
+                should_handle_timeout = False
                 if self.problem_time_remaining > 0:
                     self.problem_time_remaining -= 1
-                should_handle_timeout = (
-                    self.problem_time_remaining <= 0
-                )
+                if self.problem_time_remaining <= 0:
+                    should_handle_timeout = True
             if should_handle_timeout:
                 yield SumPracticeState.handle_timeout
                 return
@@ -94,8 +93,8 @@ class SumPracticeState(rx.State):
         self, form_data: dict
     ) -> Generator[rx.event.EventSpec | None, None, None]:
         if self.game_over:
-            yield rx.noop()
             return
+        self.timer_task_id += 1
         if self.problem_time_remaining <= 0:
             yield rx.toast(
                 "El tiempo para este problema ya había terminado.",
@@ -103,7 +102,6 @@ class SumPracticeState(rx.State):
                 position="top-center",
             )
             return
-        self.timer_task_id += 1
         submitted_value = form_data.get("answer", "")
         toast_props = {
             "duration": 3000,
@@ -113,28 +111,22 @@ class SumPracticeState(rx.State):
             answer_int = int(submitted_value)
             if answer_int == self.correct_sum:
                 self.score += POINTS_CORRECT
-                self.problem_time_remaining += (
-                    CORRECT_ANSWER_BONUS_TIME
-                )
                 yield rx.toast(
-                    f"¡Correcto! +{POINTS_CORRECT} puntos. +{CORRECT_ANSWER_BONUS_TIME}s.",
+                    f"¡Correcto! +{POINTS_CORRECT} puntos.",
                     **toast_props,
                 )
-                self.timer_task_id += 1
-                yield SumPracticeState.run_problem_timer
             else:
                 self.score += POINTS_INCORRECT
                 yield rx.toast(
                     f"Incorrecto. La respuesta era {self.correct_sum}. {POINTS_INCORRECT} punto(s).",
                     **toast_props,
                 )
-                yield SumPracticeState.start_new_exercise_round
+            yield SumPracticeState.start_new_exercise_round
         except ValueError:
             yield rx.toast(
                 "Entrada inválida. Por favor, ingresa un número.",
                 **toast_props,
             )
-            self.timer_task_id += 1
             yield SumPracticeState.run_problem_timer
 
 
@@ -206,7 +198,8 @@ def active_practice_screen() -> rx.Component:
                 class_name="w-24 h-20 border-2 border-gray-400 rounded-lg text-center text-4xl font-bold focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm",
                 auto_focus=True,
                 key=SumPracticeState.current_exercise_number.to_string()
-                + SumPracticeState.num1.to_string(),
+                + SumPracticeState.num1.to_string()
+                + SumPracticeState.num2.to_string(),
             ),
             rx.el.button(
                 "Revisar Respuesta",
@@ -282,7 +275,7 @@ head_components = [
     ),
     rx.el.meta(
         name="description",
-        content="Practica sumas con tiempo límite por problema, bonus de tiempo por aciertos y puntuación.",
+        content="Practica sumas con tiempo límite por problema y puntuación. Los números son de dos dígitos y avanzas al siguiente ejercicio tras cada respuesta.",
     ),
     rx.el.meta(
         name="viewport",
